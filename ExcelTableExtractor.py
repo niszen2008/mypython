@@ -1,78 +1,97 @@
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
+from collections import defaultdict
 
-def parse_table_info(text_file_path):
+def extract_tables_to_separate_sheets(input_file, output_file):
     """
-    Parse text file containing table and column information.
-    Expected format:
-    TableName1
-    Column1, Column2, Column3
+    Reads an Excel file where:
+    - Column 1 contains table names (rowwise)
+    - Column 2 contains column names (rowwise)
     
-    TableName2
-    Column1, Column2, Column3, Column4
+    Creates a new Excel file with:
+    - One sheet per unique table name
+    - Each sheet contains the column names for that table as headers
     """
-    tables = {}
-    current_table = None
     
-    with open(text_file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+    try:
+        # Read the input Excel file (first sheet)
+        print(f"Reading input file: {input_file}")
+        df = pd.read_excel(input_file, sheet_name=0)
+        
+        # Get the first two columns (table names and column names)
+        # Rename for clarity
+        df = df.iloc[:, :2]  # Select only first 2 columns
+        df.columns = ['TableName', 'ColumnName']
+        
+        # Remove rows with missing values
+        df = df.dropna()
+        
+        # Group column names by table name
+        table_columns = defaultdict(list)
+        
+        for index, row in df.iterrows():
+            table_name = str(row['TableName']).strip()
+            column_name = str(row['ColumnName']).strip()
+            table_columns[table_name].append(column_name)
+        
+        print(f"\nFound {len(table_columns)} unique tables")
+        
+        # Create new Excel file with separate sheets
+        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
             
-            # If line doesn't contain comma, it's a table name
-            if ',' not in line:
-                current_table = line
-                tables[current_table] = []
-            else:
-                # It's a list of columns
-                columns = [col.strip() for col in line.split(',')]
-                if current_table:
-                    tables[current_table] = columns
-    
-    return tables
+            for table_name, columns in table_columns.items():
+                # Sanitize sheet name (Excel has 31 char limit and special char restrictions)
+                sheet_name = table_name[:31]
+                sheet_name = sheet_name.replace('/', '_').replace('\\', '_').replace('*', '_')
+                sheet_name = sheet_name.replace('[', '_').replace(']', '_').replace(':', '_')
+                sheet_name = sheet_name.replace('?', '_')
+                
+                # Create a DataFrame with these columns as headers
+                table_df = pd.DataFrame(columns=columns)
+                
+                # Optionally add empty rows for data entry (uncomment if needed)
+                # for i in range(10):
+                #     table_df.loc[i] = [''] * len(columns)
+                
+                # Write to Excel sheet
+                table_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                
+                print(f"  ✓ Created sheet: '{sheet_name}' with {len(columns)} columns")
+        
+        print(f"\n✅ Success! Output saved to: {output_file}")
+        print("\nTable Summary:")
+        for table_name, columns in table_columns.items():
+            print(f"\n  Table: {table_name}")
+            print(f"  Columns: {', '.join(columns)}")
+        
+        return True
+        
+    except FileNotFoundError:
+        print(f"❌ Error: Input file '{input_file}' not found!")
+        return False
+    except Exception as e:
+        print(f"❌ Error occurred: {str(e)}")
+        return False
 
-def create_excel_with_tables(tables_dict, output_file):
-    """
-    Create Excel file with separate sheets for each table.
-    Each sheet will have the table name and column headers.
-    """
-    wb = Workbook()
-    # Remove default sheet
-    wb.remove(wb.active)
-    
-    for table_name, columns in tables_dict.items():
-        # Create new sheet for each table
-        ws = wb.create_sheet(title=table_name[:31])  # Excel sheet names limited to 31 chars
-        
-        # Write table name in first row
-        ws.append([f"Table: {table_name}"])
-        
-        # Write column headers in second row
-        ws.append(columns)
-        
-        # Optional: Add some sample empty rows
-        for i in range(5):
-            ws.append([''] * len(columns))
-    
-    wb.save(output_file)
-    print(f"Excel file created: {output_file}")
 
 # Main execution
 if __name__ == "__main__":
-    # Input: Text file with table and column information
-    input_text_file = "table_structure.txt"
     
-    # Output: Excel file with separate sheets
-    output_excel_file = "tables_output.xlsx"
+    # CONFIGURE THESE PATHS
+    INPUT_EXCEL = "input_table_details.xlsx"     # Your input Excel file path
+    OUTPUT_EXCEL = "output_separated_tables.xlsx" # Your output Excel file path
     
-    # Parse the text file
-    tables = parse_table_info(input_text_file)
+    # Run the extraction
+    print("=" * 60)
+    print("Excel Table Extractor")
+    print("=" * 60)
     
-    print(f"Found {len(tables)} tables:")
-    for table_name, columns in tables.items():
-        print(f"  - {table_name}: {len(columns)} columns")
+    success = extract_tables_to_separate_sheets(INPUT_EXCEL, OUTPUT_EXCEL)
     
-    # Create Excel file
-    create_excel_with_tables(tables, output_excel_file)
+    if success:
+        print("\n" + "=" * 60)
+        print("Process completed successfully!")
+        print("=" * 60)
+    else:
+        print("\n" + "=" * 60)
+        print("Process failed. Please check the error messages above.")
+        print("=" * 60)
