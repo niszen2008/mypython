@@ -1,19 +1,13 @@
-# This script extracts table names and column names from a complex Oracle SQL query file.
-# It uses the reference Excel file (with tables as sheets and columns as headers) to validate and resolve columns.
-# Assumptions:
-# - Columns in the SQL are preferably qualified (e.g., table.column); unqualified columns are matched to any used table that has them in the reference.
-# - Handles SELECT *, aliases, and basic resolution.
-# - Output Excel has separate sheets for each used table, with extracted/used columns as headers (similar to the reference format).
-# - Requires installation: pip install sql-metadata pandas openpyxl
-
 import pandas as pd
 from collections import defaultdict
-from sql_metadata import Parser
+import re
 
 def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
     """
     Extracts used table names and column names from an Oracle SQL query file,
-    validates against the reference Excel, and creates a new Excel with separate sheets for each used table.
+    including inner SQL and WITH clauses, validates against the reference Excel,
+    and creates a new Excel with separate sheets for each used table.
+    Ignores WIDTH statements and outer XML details.
     """
     
     try:
@@ -22,14 +16,62 @@ def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
         with open(sql_file, 'r') as f:
             query = f.read().strip()
         
-        # Parse the SQL query
-        parser = Parser(query)
-        raw_tables = parser.tables
-        tables = [t.upper() for t in raw_tables]
-        columns = parser.columns
-        aliases = {k.upper(): v.upper() for k, v in parser.tables_aliases.items()}
+        # Clean the query: Remove WIDTH statements and XML-related content
+        query = re.sub(r'\bCOLUMN\s+\w+\s+WIDTH\s+\d+\s*', '', query, flags=re.IGNORECASE)
+        query = re.sub(r'\b(XMLTYPE|XMLAGG|XML\s*\([^)]*\))\b', '', query, flags=re.IGNORECASE)
         
-        print(f"\nFound {len(tables)} tables in query: {', '.join(raw_tables)}")
+        # Normalize query: Remove extra whitespace, newlines for easier parsing
+        query = ' '.join(query.split())
+        
+        # Extract CTE names (WITH clause)
+        cte_names = set()
+        cte_pattern = r'\bWITH\s+((?:\w+\s*(?:,\s*\w+\s*)*)\s*AS\s*\([^)]*\))'
+        cte_matches = re.finditer(cte_pattern, query, re.IGNORECASE)
+        for match in cte_matches:
+            cte_list = match.group(1).split(',')
+            for cte in cte_list:
+                cte_name = cte.strip().split()[0]
+                cte_names.add(cte_name.upper())
+        
+        # Extract table names and aliases from FROM/JOIN clauses, including subqueries
+        tables = set()
+        aliases = {}
+        # Pattern for FROM/JOIN, capturing tables and aliases, including subqueries
+        table_pattern = r'\b(FROM|JOIN)\s+((?:[\w.]+|\(\s*SELECT\s+[^)]+\))\s*(?:AS\s+|\s+)(\w+)?'
+        subquery_pattern = r'\(\s*SELECT\s+.*?FROM\s+([\w.]+)\s*(?:AS\s+|\s+)(\w+)?'
+        
+        # Main query tables
+        for match in re.finditer(table_pattern, query, re.IGNORECASE):
+            clause, table_ref, alias = match.groups()
+            if table_ref.startswith('('):
+                # Handle subquery
+                for sub_match in re.finditer(subquery_pattern, table_ref, re.IGNORECASE):
+                    table_name, sub_alias = sub_match.groups()
+                    table_name = table_name.split('.')[-1].upper()
+                    if table_name not in cte_names:
+                        tables.add(table_name)
+                        if sub_alias:
+                            aliases[sub_alias.upper()] = table_name
+            else:
+                table_name = table_ref.split('.')[-1].upper()
+                if table_name not in cte_names:
+                    tables.add(table_name)
+                    if alias:
+                        aliases[alias.upper()] = table_name
+        
+        print(f"\nFound {len(tables)} tables in query: {', '.join(tables)}")
+        
+        # Extract column names (qualified and unqualified)
+        columns = set()
+        column_pattern = r'\b(?:(\w+)\.)?(\w+)\b(?!\s*(?:=|\(|,|\s+AS\s+|\s+FROM|\s+WHERE|\s+GROUP|\s+ORDER|\s+JOIN))'
+        for match in re.finditer(column_pattern, query, re.IGNORECASE):
+            table_part, col_name = match.groups()
+            col_name = col_name.upper()
+            if col_name not in ('SELECT', 'FROM', 'JOIN', 'WHERE', 'GROUP', 'ORDER', 'BY', 'AND', 'OR', 'AS', 'ON', '*'):
+                if table_part:
+                    columns.add(f"{table_part.upper()}.{col_name}")
+                else:
+                    columns.add(col_name)
         
         # Load reference Excel
         print(f"\nLoading reference: {reference_excel}")
@@ -45,12 +87,9 @@ def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
         for col in columns:
             if '.' in col:
                 # Qualified column (e.g., table.col or alias.col)
-                parts = col.rsplit('.', 1)  # Split from right to handle db.schema.table.col if present, but assume simple
+                parts = col.rsplit('.', 1)
                 if len(parts) == 2:
                     table_part, col_name = parts
-                    table_part = table_part.upper()
-                    col_name = col_name.upper()
-                    
                     # Resolve if it's an alias
                     table = aliases.get(table_part, table_part)
                     
@@ -67,8 +106,8 @@ def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
                             else:
                                 print(f"Warning: Column '{col}' not found in reference for table '{table}'")
             else:
-                # Unqualified column (e.g., col) - match to any used table in reference that has it
-                col_upper = col.upper()
+                # Unqualified column - match to any used table in reference
+                col_upper = col
                 found = False
                 for t in tables:
                     if t in table_to_columns and col_upper in table_to_columns[t]:
@@ -77,10 +116,10 @@ def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
                 if not found:
                     print(f"Warning: Unqualified column '{col}' not found in any used table's reference")
         
-        # Include tables even if no columns extracted (e.g., if only used in JOIN without selecting columns)
+        # Include tables even if no columns extracted (e.g., used in JOIN)
         for t in tables:
             if t not in used_columns and t in table_to_columns:
-                used_columns[t] = set()  # Empty, but sheet will be created with no columns (or perhaps skip?)
+                used_columns[t] = set()  # Empty sheet for tables with no columns
         
         print(f"\nFound usage in {len(used_columns)} tables")
         
