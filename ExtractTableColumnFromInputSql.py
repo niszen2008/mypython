@@ -38,7 +38,9 @@ def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
         aliases = {}
         # Pattern for FROM/JOIN, capturing tables and aliases, including subqueries
         table_pattern = r'\b(FROM|JOIN)\s+((?:[\w.]+|\(\s*SELECT\s+[^)]+\))\s*(?:AS\s+|\s+)(\w+)?'
-        subquery_pattern = r'\(\s*SELECT\s+.*?FROM\s+([\w.]+)\s*(?:AS\s+|\s+)(\w+)?'
+        #subquery_pattern = r'\(\s*SELECT\s+.*?FROM\s+([\w.]+)\s*(?:AS\s+|\s+)(\w+)?'
+        subquery_pattern = r'\(\s*(SELECT\s+((?:(?!SELECT|FROM).)*|(?R))*\s*FROM\s+.*?\s*\)'
+
         
         # Main query tables
         for match in re.finditer(table_pattern, query, re.IGNORECASE):
