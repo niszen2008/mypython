@@ -67,7 +67,7 @@ def extract_table_column_from_sql(sql_query, table_reference):
         # Check if table is referenced in SQL
         # Look for table name in FROM, JOIN clauses
         table_pattern = r'\b' + re.escape(table_upper) + r'\b'
-        
+                
         if re.search(table_pattern, sql_upper):
             print(f"\n  Found table: {table_name}")
             
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     
     # CONFIGURE THESE PATHS
     REFERENCE_EXCEL = "output_separated_tables.xlsx"  # Table reference file
-    SQL_INPUT_FILE = "query.sql"                       # Your Oracle SQL file
+    SQL_INPUT_FILE = "complex_oracle_query.sql"                       # Your Oracle SQL file
     OUTPUT_EXCEL = "sql_analysis_result.xlsx"          # Output results file
     
     # Run the analysis
