@@ -1,5 +1,5 @@
 import re
-import cx_Oracle
+#import cx_Oracle
 import pandas as pd
 from openpyxl import load_workbook
 from collections import defaultdict
@@ -196,7 +196,7 @@ def main():
     
     try:
         # Connect to database
-        analyzer.connect()
+        #analyzer.connect()
         
         # Step 1: Create reference Excel with table and column details
         print("=" * 60)
