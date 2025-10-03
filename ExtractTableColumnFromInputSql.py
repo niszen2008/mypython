@@ -1,185 +1,188 @@
 import pandas as pd
-from collections import defaultdict
 import re
+from collections import defaultdict
 
-def extract_tables_columns_from_sql(sql_file, reference_excel, output_file):
+def load_table_reference(reference_file):
     """
-    Extracts used table names and column names from an Oracle SQL query file,
-    including inner SQL and WITH clauses, validates against the reference Excel,
-    and creates a new Excel with separate sheets for each used table.
-    Ignores WIDTH statements and outer XML details.
+    Load table and column information from the reference Excel file.
+    Returns a dictionary: {table_name: [list of columns]}
     """
+    print(f"Loading table reference from: {reference_file}")
+    
+    table_reference = {}
     
     try:
-        # Read the SQL query from file
-        print(f"Reading SQL file: {sql_file}")
-        with open(sql_file, 'r') as f:
-            query = f.read().strip()
+        # Read all sheets from the reference Excel
+        excel_file = pd.ExcelFile(reference_file)
         
-        # Clean the query: Remove WIDTH statements and XML-related content
-        query = re.sub(r'\bCOLUMN\s+\w+\s+WIDTH\s+\d+\s*', '', query, flags=re.IGNORECASE)
-        query = re.sub(r'\b(XMLTYPE|XMLAGG|XML\s*\([^)]*\))\b', '', query, flags=re.IGNORECASE)
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(reference_file, sheet_name=sheet_name)
+            # Get column names from the sheet
+            columns = df.columns.tolist()
+            table_reference[sheet_name] = columns
+            print(f"  ✓ Loaded table: {sheet_name} with {len(columns)} columns")
         
-        # Normalize query: Remove extra whitespace, newlines for easier parsing
-        query = ' '.join(query.split())
+        print(f"\nTotal tables loaded: {len(table_reference)}")
+        return table_reference
         
-        # Extract CTE names (WITH clause)
-        cte_names = set()
-        cte_pattern = r'\bWITH\s+((?:\w+\s*(?:,\s*\w+\s*)*)\s*AS\s*\([^)]*\))'
-        cte_matches = re.finditer(cte_pattern, query, re.IGNORECASE)
-        for match in cte_matches:
-            cte_list = match.group(1).split(',')
-            for cte in cte_list:
-                cte_name = cte.strip().split()[0]
-                cte_names.add(cte_name.upper())
-        
-        # Extract table names and aliases from FROM/JOIN clauses, including subqueries
-        tables = set()
-        aliases = {}
-        # Pattern for FROM/JOIN, capturing tables and aliases, including subqueries
-        table_pattern = r'\b(FROM|JOIN)\s+((?:[\w.]+|\(\s*SELECT\s+[^)]+\))\s*(?:AS\s+|\s+)(\w+)?'
-        #subquery_pattern = r'\(\s*SELECT\s+.*?FROM\s+([\w.]+)\s*(?:AS\s+|\s+)(\w+)?'
-        subquery_pattern = r'\(\s*(SELECT\s+((?:(?!SELECT|FROM).)*|(?R))*\s*FROM\s+.*?\s*\)'
+    except Exception as e:
+        print(f"❌ Error loading reference file: {str(e)}")
+        return {}
 
+
+def read_sql_file(sql_file_path):
+    """
+    Read SQL query from file.
+    """
+    try:
+        with open(sql_file_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
+        print(f"✓ SQL file loaded: {sql_file_path}")
+        return sql_content
+    except Exception as e:
+        print(f"❌ Error reading SQL file: {str(e)}")
+        return ""
+
+
+def extract_table_column_from_sql(sql_query, table_reference):
+    """
+    Extract table names and column names from SQL query using the reference.
+    Returns a dictionary: {table_name: [list of columns found in query]}
+    """
+    results = defaultdict(list)
+    
+    # Convert SQL to uppercase for easier matching
+    sql_upper = sql_query.upper()
+    
+    # Remove comments from SQL
+    sql_upper = re.sub(r'--.*?$', '', sql_upper, flags=re.MULTILINE)
+    sql_upper = re.sub(r'/\*.*?\*/', '', sql_upper, flags=re.DOTALL)
+    
+    print("\nAnalyzing SQL query...")
+    
+    # For each table in reference
+    for table_name, columns in table_reference.items():
+        table_upper = table_name.upper()
         
-        # Main query tables
-        for match in re.finditer(table_pattern, query, re.IGNORECASE):
-            clause, table_ref, alias = match.groups()
-            if table_ref.startswith('('):
-                # Handle subquery
-                for sub_match in re.finditer(subquery_pattern, table_ref, re.IGNORECASE):
-                    table_name, sub_alias = sub_match.groups()
-                    table_name = table_name.split('.')[-1].upper()
-                    if table_name not in cte_names:
-                        tables.add(table_name)
-                        if sub_alias:
-                            aliases[sub_alias.upper()] = table_name
-            else:
-                table_name = table_ref.split('.')[-1].upper()
-                if table_name not in cte_names:
-                    tables.add(table_name)
-                    if alias:
-                        aliases[alias.upper()] = table_name
-        
-        print(f"\nFound {len(tables)} tables in query: {', '.join(tables)}")
-        
-        # Extract column names (qualified and unqualified)
-        columns = set()
-        column_pattern = r'\b(?:(\w+)\.)?(\w+)\b(?!\s*(?:=|\(|,|\s+AS\s+|\s+FROM|\s+WHERE|\s+GROUP|\s+ORDER|\s+JOIN))'
-        for match in re.finditer(column_pattern, query, re.IGNORECASE):
-            table_part, col_name = match.groups()
-            col_name = col_name.upper()
-            if col_name not in ('SELECT', 'FROM', 'JOIN', 'WHERE', 'GROUP', 'ORDER', 'BY', 'AND', 'OR', 'AS', 'ON', '*'):
-                if table_part:
-                    columns.add(f"{table_part.upper()}.{col_name}")
-                else:
-                    columns.add(col_name)
-        
-        # Load reference Excel
-        print(f"\nLoading reference: {reference_excel}")
-        excel = pd.ExcelFile(reference_excel)
-        table_to_columns = {}
-        for sheet in excel.sheet_names:
-            df = excel.parse(sheet, nrows=0)  # Read only headers
-            table_to_columns[sheet.upper()] = [str(col).upper() for col in df.columns]
-        
-        # Collect used columns per table (use set for deduplication)
-        used_columns = defaultdict(set)
-        
-        for col in columns:
-            if '.' in col:
-                # Qualified column (e.g., table.col or alias.col)
-                parts = col.rsplit('.', 1)
-                if len(parts) == 2:
-                    table_part, col_name = parts
-                    # Resolve if it's an alias
-                    table = aliases.get(table_part, table_part)
-                    
-                    if table in tables:
-                        if col_name == '*':
-                            # Add all columns from reference for this table
-                            if table in table_to_columns:
-                                for c in table_to_columns[table]:
-                                    used_columns[table].add(c)
-                        else:
-                            # Add specific column if it exists in reference
-                            if table in table_to_columns and col_name in table_to_columns[table]:
-                                used_columns[table].add(col_name)
-                            else:
-                                print(f"Warning: Column '{col}' not found in reference for table '{table}'")
-            else:
-                # Unqualified column - match to any used table in reference
-                col_upper = col
-                found = False
-                for t in tables:
-                    if t in table_to_columns and col_upper in table_to_columns[t]:
-                        used_columns[t].add(col_upper)
-                        found = True
-                if not found:
-                    print(f"Warning: Unqualified column '{col}' not found in any used table's reference")
-        
-        # Include tables even if no columns extracted (e.g., used in JOIN)
-        for t in tables:
-            if t not in used_columns and t in table_to_columns:
-                used_columns[t] = set()  # Empty sheet for tables with no columns
-        
-        print(f"\nFound usage in {len(used_columns)} tables")
-        
-        # Create output Excel with separate sheets
-        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-            for table, cols in used_columns.items():
-                # Sanitize sheet name
-                sheet_name = table[:31]
-                sheet_name = sheet_name.replace('/', '_').replace('\\', '_').replace('*', '_')
-                sheet_name = sheet_name.replace('[', '_').replace(']', '_').replace(':', '_')
-                sheet_name = sheet_name.replace('?', '_')
+        # Check if table is referenced in SQL
+        # Look for table name in FROM, JOIN clauses
+        table_pattern = r'\b' + re.escape(table_upper) + r'\b'
                 
-                # Create DataFrame with columns as headers (even if empty)
-                col_list = sorted(list(cols))
-                table_df = pd.DataFrame(columns=col_list)
+        if re.search(table_pattern, sql_upper):
+            print(f"\n  Found table: {table_name}")
+            
+            # For each column in this table, check if it's in the SQL
+            for column in columns:
+                column_upper = column.upper()
                 
-                # Write to sheet
-                table_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                # Look for column references (with or without table prefix)
+                # Pattern 1: table.column
+                pattern1 = r'\b' + re.escape(table_upper) + r'\.\s*' + re.escape(column_upper) + r'\b'
+                # Pattern 2: just column name (if unique enough)
+                pattern2 = r'\b' + re.escape(column_upper) + r'\b'
                 
-                print(f"  ✓ Created sheet: '{sheet_name}' with {len(col_list)} columns")
+                if re.search(pattern1, sql_upper) or re.search(pattern2, sql_upper):
+                    results[table_name].append(column)
+                    print(f"    ✓ Column: {column}")
+    
+    return dict(results)
+
+
+def save_results_to_excel(results, output_file):
+    """
+    Save extraction results to Excel file.
+    Format: TableName | ColumnName
+    """
+    try:
+        data = []
         
-        print(f"\n✅ Success! Output saved to: {output_file}")
+        for table_name, columns in results.items():
+            for column in columns:
+                data.append({
+                    'TableName': table_name,
+                    'ColumnName': column
+                })
         
-        # Print summary
-        print("\nExtracted Usage Summary:")
-        for table, cols in used_columns.items():
-            print(f"\n  Table: {table}")
-            print(f"  Columns: {', '.join(sorted(cols)) if cols else 'None extracted'}")
+        if not data:
+            print("\n⚠️  No tables/columns found in SQL query!")
+            # Create empty DataFrame
+            df = pd.DataFrame(columns=['TableName', 'ColumnName'])
+        else:
+            df = pd.DataFrame(data)
+        
+        # Save to Excel
+        df.to_excel(output_file, index=False, sheet_name='SQL_Analysis')
+        
+        print(f"\n✅ Results saved to: {output_file}")
+        print(f"   Total rows: {len(data)}")
         
         return True
-    
-    except FileNotFoundError as e:
-        print(f"❌ Error: File not found - {str(e)}")
-        return False
+        
     except Exception as e:
-        print(f"❌ Error occurred: {str(e)}")
+        print(f"❌ Error saving results: {str(e)}")
         return False
+
+
+def analyze_sql_query(reference_file, sql_file, output_file):
+    """
+    Main function to analyze SQL query and extract table/column information.
+    """
+    print("=" * 70)
+    print("SQL Query Analyzer - Table & Column Extractor")
+    print("=" * 70 + "\n")
+    
+    # Step 1: Load table reference
+    table_reference = load_table_reference(reference_file)
+    
+    if not table_reference:
+        print("❌ Failed to load table reference. Exiting.")
+        return False
+    
+    # Step 2: Read SQL file
+    sql_query = read_sql_file(sql_file)
+    
+    if not sql_query:
+        print("❌ Failed to read SQL file. Exiting.")
+        return False
+    
+    print(f"\nSQL Query length: {len(sql_query)} characters")
+    
+    # Step 3: Extract tables and columns
+    results = extract_table_column_from_sql(sql_query, table_reference)
+    
+    # Step 4: Display summary
+    print("\n" + "=" * 70)
+    print("EXTRACTION SUMMARY")
+    print("=" * 70)
+    
+    if results:
+        for table_name, columns in results.items():
+            print(f"\n📊 Table: {table_name}")
+            print(f"   Columns found: {len(columns)}")
+            for col in columns:
+                print(f"     • {col}")
+    else:
+        print("\n⚠️  No matching tables or columns found in SQL query!")
+    
+    # Step 5: Save results
+    print("\n" + "=" * 70)
+    success = save_results_to_excel(results, output_file)
+    
+    if success:
+        print("=" * 70)
+        print("✅ Process completed successfully!")
+        print("=" * 70)
+    
+    return success
+
 
 # Main execution
 if __name__ == "__main__":
     
     # CONFIGURE THESE PATHS
-    REFERENCE_EXCEL = "output_separated_tables.xlsx"  # The reference file from previous script
-    INPUT_SQL = "complex_oracle_query.sql"            # Your input Oracle SQL query file path
-    OUTPUT_EXCEL = INPUT_SQL.replace('.sql', '.xlsx') # Output Excel named based on input SQL file
+    REFERENCE_EXCEL = "output_separated_tables.xlsx"  # Table reference file
+    SQL_INPUT_FILE = "complex_oracle_query.sql"                       # Your Oracle SQL file
+    OUTPUT_EXCEL = "sql_analysis_result.xlsx"          # Output results file
     
-    # Run the extraction
-    print("=" * 60)
-    print("SQL Query Table/Column Extractor")
-    print("=" * 60)
-    
-    success = extract_tables_columns_from_sql(INPUT_SQL, REFERENCE_EXCEL, OUTPUT_EXCEL)
-    
-    if success:
-        print("\n" + "=" * 60)
-        print("Process completed successfully!")
-        print("=" * 60)
-    else:
-        print("\n" + "=" * 60)
-        print("Process failed. Please check the error messages above.")
-        print("=" * 60)
+    # Run the analysis
+    analyze_sql_query(REFERENCE_EXCEL, SQL_INPUT_FILE, OUTPUT_EXCEL)
