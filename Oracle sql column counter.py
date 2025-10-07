@@ -53,8 +53,13 @@ def extract_columns_from_query(sql_query):
         if column in sql_keywords:
             continue
             
-        # Use only column name without table/alias prefix
-        columns.append(column)
+        # Build full column name (with table/alias prefix if present)
+        if prefix:
+            full_column = f"{prefix.rstrip('.')}.{column}"
+        else:
+            full_column = column
+            
+        columns.append(full_column)
     
     # Count occurrences
     column_counts = Counter(columns)
@@ -79,8 +84,9 @@ def display_results(column_counts):
     print(f"{'Column Name':<40} {'Count':>10}")
     print("-"*60)
     
-    # Sort by column name (ascending)
-    sorted_columns = sorted(column_counts.items(), key=lambda x: x[0])
+    # Sort by count (descending), then by name
+    sorted_columns = sorted(column_counts.items(), 
+                          key=lambda x: (-x[1], x[0]))
     
     for column, count in sorted_columns:
         print(f"{column:<40} {count:>10}")
