@@ -1,3 +1,4 @@
+from sql_metadata import Parser
 import re
 from collections import Counter
 
@@ -100,27 +101,30 @@ def display_results(column_counts):
 # Example usage
 if __name__ == "__main__":
     # Example Oracle SQL query
-    sample_query = """
-    SELECT 
-        e.employee_id,
-        e.first_name,
-        e.last_name,
-        d.department_name,
-        e.salary,
-        e.hire_date
-    FROM 
-        employees e
-        INNER JOIN departments d ON e.department_id = d.department_id
-    WHERE 
-        e.salary > 50000
-        AND e.hire_date > TO_DATE('2020-01-01', 'YYYY-MM-DD')
-        AND d.department_name IN ('IT', 'Sales')
-    ORDER BY 
-        e.salary DESC, e.last_name
-    """
+    # sample_query = """
+    # SELECT 
+    #     e.employee_id,
+    #     e.first_name,
+    #     e.last_name,
+    #     d.department_name,
+    #     e.salary,
+    #     e.hire_date
+    # FROM 
+    #     employees e
+    #     INNER JOIN departments d ON e.department_id = d.department_id
+    # WHERE 
+    #     e.salary > 50000
+    #     AND e.hire_date > TO_DATE('2020-01-01', 'YYYY-MM-DD')
+    #     AND d.department_name IN ('IT', 'Sales')
+    # ORDER BY 
+    #     e.salary DESC, e.last_name
+    # """
     
     print("Analyzing SQL Query:")
-    print(sample_query)
+    #print(sample_query)
+
+    with open("complex_oracle_query.sql", 'r', encoding='utf-8') as f:
+            sample_query = f.read()
     
     # Extract columns and their counts
     result = extract_columns_from_query(sample_query)
